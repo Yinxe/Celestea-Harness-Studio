@@ -91,6 +91,20 @@ pnpm --filter @celestea/studio start   # 默认 127.0.0.1:3778
 
 ---
 
+### 4. 桌面端（可选）
+
+同一套后端 + 前端，也能作为原生桌面应用运行（自带系统托盘、单文件产物、可选的自动更新）：
+
+```bash
+pnpm desktop:dev        # 开发：直接跑 TS 源码，约 4 秒启动；改后端源码自动重启
+pnpm desktop:build      # 本机平台的标准安装包（Linux: AppImage+deb+rpm，macOS: .app，Windows: .msi）
+pnpm desktop:build:all  # 一台机器产全部五个目标（Deno 按目标下载预构建运行时，不需要交叉编译工具链）
+pnpm desktop:publish    # 生成更新清单并建 GitHub Release（加 --dry-run 先看计划，无需凭据）
+```
+
+产物落在 `scripts/desktop/dist/`；命令、环境变量、产物清单与排查用的日志行见
+[`docs/desktop.md`](./docs/desktop.md)。
+
 ## 文档
 
 - **[docs/README.md](docs/README.md)** —— `docs/` 全量索引（每篇的状态、一句话、权威入口）。**找文档先看它。**

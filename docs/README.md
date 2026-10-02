@@ -24,6 +24,7 @@
 | [`iteration-e/`](./iteration-e/README.md) | 设计 | 迭代方向 E（能力深水区，分册）：断点恢复 / 可恢复多 agent / 成本账本 / 模型降级的目标契约、分期与验收标准 | [`README.md`](./iteration-e/README.md)；落地后回写 [`ARCHITECTURE.md`](./ARCHITECTURE.md) |
 | [`modes-standard-vs-execution.md`](./modes-standard-vs-execution.md) | 设计（**P0 已实现，W729**） | 特性设计：**会话双模式**（标准模式 / 执行模式，即 DSH PTC 对应物）的目标契约、分期与可机械检验的验收标准；§10 是 P0 落地回填 | 本文；PTC 语义来源见归档的 DSH 评估（W253/W254，已于 W881 清理出公开仓） |
 | [`deployment.md`](./deployment.md) | 当前 | **部署与安全模型**：生产 systemd + nginx、隧道访问、安全模型（含 Windows 差异表） | 本文；登录门见 [`archive/decisions/feature-studio-auth.md`](./archive/decisions/feature-studio-auth.md) |
+| [`desktop.md`](./desktop.md) | 当前 | **桌面端**：`deno desktop` 打包命令与标准产物集合、三个必知的构建事实、自动更新的烘焙与 feed 布局、手动发布 workflow 与 R2 Secrets | 本文；门禁见 [`tests/desktop-packaging.test.ts`](../tests/desktop-packaging.test.ts) |
 | [`configuration.md`](./configuration.md) | 当前 | **配置**：`CELESTEA_HOME` 解析顺序与目录布局、环境变量全表、模型接入、权限档位 | 本文；数据文件 schema 见 [`data-files.md`](./data-files.md) |
 | [`AGENT.md`](./AGENT.md) | 当前 | **开发与提交规范**：完成定义（Definition of Done）、提交消息格式与粒度、发布流程（先 tag 再 build）、派工协议、文档规范、写代码取向 | 本文；门禁清单见根 `package.json` 的 `check` |
 | [`DEPENDENCY-POLICY.md`](./DEPENDENCY-POLICY.md) | 当前（W847 W0） | **依赖与工具链策略**：Node 版本带 + 启动守卫、冻结安装（pnpm-workspace.yaml）、升级验证协议与回滚、为什么 audit 不进门禁、外部运行时依赖清点 | 本文 |

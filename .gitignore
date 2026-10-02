@@ -59,6 +59,24 @@ fixtures/sessions/*
 apps/studio/webdist/
 packages/core/contracts/
 
+# 桌面端（`deno desktop`）暂存目录：由 scripts/desktop-build.mjs 从
+# apps/studio/webdist 复制到入口旁边的副本，是 `--include webdist` 的输入。
+# 真源永远是 apps/web/dist，所以它必须和 dist/ 一样是 git 盲区（否则提交的
+# 是一份会过期的前端）。构建产物落在 scripts/desktop/dist/，由上面的 `dist/`
+# 规则覆盖 —— 不需要第二行，也不该改名字（改名字会同时失去 git / eslint /
+# dependency-cruiser 三重忽略）。
+scripts/desktop/webdist/
+# scripts/desktop/deno.json 由 scripts/desktop-build.mjs **每次构建生成**：
+# 里面是这次的 version（来自 git describe）和按目标三元组拼出的更新源地址。
+# 它必须躺在入口旁边（Deno 自动发现），也因此必须是 git 盲区 —— 提交它等于
+# 提交一个每次发布都会变的版本号。
+scripts/desktop/deno.json
+# scripts/desktop/vendor/ 是 studio 的裸 npm 依赖（hono / @hono/node-server）在构建
+# 时从 node_modules 复制出来的副本：Deno 不肯把 node_modules 里的路径放进编译产物
+# 的虚拟文件系统（运行时报 entry missing），import map 只能指向普通目录。真源仍然
+# 是 apps/studio/package.json 里的版本范围，这里只是它的一次构建期快照。
+scripts/desktop/vendor/
+
 # worker 工作树（W886）：派工时在仓内 <repo>/.worktrees/<wid> 建独立 worktree，
 # 而不是 /tmp（这台机的 /tmp 是 tmpfs，node_modules 会常驻内存）。
 # 它们必须是 git 与 eslint 的盲区，否则主工作树会把它们当未跟踪文件、并 lint 半成品代码。

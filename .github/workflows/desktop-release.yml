@@ -1,0 +1,236 @@
+# Desktop release — MANUAL ONLY (`workflow_dispatch`), by explicit decision:
+# a desktop installer is a published artifact users download, and this repo's
+# 铁律 9 already says publication needs a human in the loop (scripts/publish.mjs
+# fails closed without CELESTEA_PUBLISH_AUTHORIZED=1). Nothing here runs on
+# push/tag.
+#
+# ONE RUNNER BUILDS EVERY PLATFORM. `deno desktop` cross-compiles: for each
+# target it downloads Deno's own PREBUILT runtime (`libdenort-<triple>`) and
+# webview backend, so no macOS/Windows machine, no Rust toolchain and no target
+# SDK is involved. All five triples (Linux x64/arm64, macOS x64/arm64,
+# Windows x64) are produced here on ubuntu-latest, which is why there is no
+# runner matrix any more. The trade-off is wall-clock, not capability: the
+# matrix used to parallelize; CI caching of Deno's download cache (below) is
+# what keeps repeat runs quick.
+#
+# Artifacts: standard installers per platform (Linux .AppImage/.deb/.rpm,
+# macOS .app, Windows .msi) plus the auto-update feed files (per-triple
+# latest.json, bsdiff patches, and the runtime dylib the NEXT release diffs
+# against). They are attached to a GitHub Release.
+#
+# NOT here: uploading the update feed to a static host. Deno's updater fetches
+# with `redirect: "error"`, and GitHub Release asset URLs answer 302 — so a feed
+# served from a Release cannot be used by the app. Set `update_base_url` (and
+# keep `--r2` in scripts/desktop/publish.mjs) once a redirect-free host exists;
+# until then builds carry no feed and auto-update stays dormant.
+name: desktop-release
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "创建 GitHub Release 并上传全部产物（不勾选 = 只构建并留档 artifact）"
+        required: true
+        default: false
+        type: boolean
+# Everything else is derived, so a release run asks exactly ONE question:
+#   · version            ← `git describe --tags`（先打 tag 再发版，见 docs/AGENT.md §4）
+#   · update repo        ← 仓库变量 DESKTOP_UPDATE_REPO，未设时用 github.repository
+#   · static feed root   ← 仓库变量 DESKTOP_UPDATE_BASE_URL，未设时不烘更新源（应用侧更新休眠）
+
+# A release is never cancelled halfway by an unrelated run.
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build all platforms (ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      # Full history: the app version derives from `git describe --tags`.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.22.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      # Pinned, not `v2.x`: `deno desktop` is experimental, and a silent Deno
+      # upgrade must not change a shipped installer. Bump deliberately.
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: 2.9.7
+      # Cross-compiling five targets downloads each target's prebuilt runtime and
+      # webview backend (hundreds of MB). Caching them turns the second run from
+      # "download everything" into "reuse".
+      - name: Cache Deno's per-target downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/deno
+          key: deno-desktop-2.9.7-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: deno-desktop-2.9.7-
+      # The build needs more than "a runner": cross-compiling downloads Deno's
+      # prebuilt runtime per target, staging zips bundle directories, the feed needs
+      # bsdiff, and the smoke test needs a virtual display. Assert them instead of
+      # discovering a missing tool in the middle of a release.
+      - name: Preflight (assert the toolchain this build actually uses)
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --version
+          pnpm --version
+          deno --version | head -1
+          gh --version | head -1
+          zip --version | head -2 | tail -1
+          for tool in zip gh xvfb-run curl; do
+            command -v "$tool" >/dev/null || { echo "::error::$tool missing on this runner"; exit 1; }
+          done
+          echo "preflight ok"
+      - name: Install (frozen lockfile)
+        run: pnpm install --frozen-lockfile
+      - name: Build workspace
+        run: pnpm build
+      - name: Resolve version (from the tag; see docs/AGENT.md §4)
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          derived=$(node scripts/version.mjs --json | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(JSON.parse(s).version))")
+          echo "value=$derived" >> "$GITHUB_OUTPUT"
+          echo "[version] $derived"
+      - name: Build every target
+        shell: bash
+        env:
+          CELESTEA_SKIP_BUILD: "1"
+          CELESTEA_DESKTOP_UPDATE_BASE_URL: ${{ vars.DESKTOP_UPDATE_BASE_URL }}
+          CELESTEA_DESKTOP_UPDATE_REPO: ${{ vars.DESKTOP_UPDATE_REPO || github.repository }}
+          CELESTEA_DESKTOP_VERSION: ${{ steps.version.outputs.value }}
+        # One command: the standard installer set per target OS lives in
+        # scripts/desktop/build.mjs, so CI and a laptop cannot drift apart.
+        run: node scripts/desktop/build.mjs --all-targets
+      # The packaged app is the only artifact users run, so at least ONE platform
+      # must prove "boots -> serves the real UI -> exits cleanly" mechanically.
+      - name: Smoke test (linux x64)
+        shell: bash
+        env:
+          CELESTEA_HOME: ${{ runner.temp }}/celestea-smoke
+          CELESTEA_DESKTOP_SMOKE_MS: "30000"
+          # ubuntu-latest has no libfuse2, so run the AppImage without mounting it.
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: |
+          set -euo pipefail
+          mkdir -p "$CELESTEA_HOME"
+          app=$(ls scripts/desktop/dist/*linux-x64.AppImage | head -1)
+          xvfb-run -a "$app" > "$RUNNER_TEMP/smoke.log" 2>&1 &
+          pid=$!
+          port=""
+          for _ in $(seq 1 60); do
+            port=$(grep -oE '127\.0\.0\.1:[0-9]+' "$RUNNER_TEMP/smoke.log" | head -1 | cut -d: -f2 || true)
+            [ -n "$port" ] && break
+            sleep 1
+          done
+          if [ -z "$port" ]; then
+            echo "::error::desktop app never announced a port"; cat "$RUNNER_TEMP/smoke.log"; exit 1
+          fi
+          curl -fsS "http://127.0.0.1:${port}/" | grep -q "<title>Celestea Studio</title>"
+          curl -fsS "http://127.0.0.1:${port}/api/health" | grep -q '"ok":true'
+          wait "$pid"
+      - name: Extract runtime dylibs (patch baselines for the next release)
+        shell: bash
+        env:
+          CELESTEA_SKIP_BUILD: "1"
+          CELESTEA_DESKTOP_VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          set -euo pipefail
+          for target in \
+            x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu \
+            x86_64-apple-darwin aarch64-apple-darwin \
+            x86_64-pc-windows-msvc
+          do
+            node scripts/desktop/update.mjs --dylib-only \
+              --triple "$target" --version "${{ steps.version.outputs.value }}" \
+              --artifacts scripts/desktop/dist --out scripts/desktop/dist/feed
+          done
+      # bsdiff CLI: qbsdiff (inside Deno's updater) reads plain bsdiff 4.x. Do NOT
+      # substitute the repo's zstd-wrapped bsdiff_helper — that is for `deno upgrade`.
+      - name: Install bsdiff
+        run: |
+          set -euo pipefail
+          sudo apt-get update && sudo apt-get install -y bsdiff
+          command -v bsdiff >/dev/null || { echo "::error::bsdiff unavailable"; exit 1; }
+      # latest.json is generated HERE, where the build outputs actually live (the
+      # app directories are what the patch generator diffs), and the same step
+      # stages everything publishable into dist/release/ (including the macOS
+      # `.app` as a ZIP — a directory cannot be a Release asset). The previous
+      # release's dylibs come from its Release assets, so patches are built only
+      # when there is something to diff against.
+      - name: Generate the update feed and stage dist/release/
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CELESTEA_SKIP_BUILD: "1"
+          CELESTEA_DESKTOP_UPDATE_REPO: ${{ vars.DESKTOP_UPDATE_REPO || github.repository }}
+          CELESTEA_DESKTOP_VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          set -euo pipefail
+          node scripts/desktop/publish.mjs --no-release \
+            --version "${{ steps.version.outputs.value }}" --previous-release latest
+          echo "--- staged release set ---"
+          ls -la scripts/desktop/dist/release/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-release
+          # Exactly what will be distributed: installers, bundle ZIPs, latest.json,
+          # the next release's patch baselines, and the checksum/index files.
+          path: scripts/desktop/dist/release/**
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: publish (GitHub Release)
+    needs: build
+    if: ${{ inputs.publish }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    # Needed to create the Release; declared on this job only so the build stays read-only.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Resolve version (from the tag)
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          derived=$(node scripts/version.mjs --json | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(JSON.parse(s).version))")
+          echo "value=$derived" >> "$GITHUB_OUTPUT"
+      - name: Download the staged release set
+        uses: actions/download-artifact@v4
+        with:
+          name: desktop-release
+          path: artifacts
+      # ONE command publishes it: the feed and the staged directory were produced
+      # by the build job, so nothing is regenerated here. R2 upload is opt-in
+      # (`--r2`) and deliberately NOT used.
+      - name: Publish to GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          node scripts/desktop/publish.mjs --publish-staged artifacts \
+            --version "${{ steps.version.outputs.value }}"
